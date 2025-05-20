@@ -40,7 +40,7 @@
             text-align: center;
             display: none;
         }
-        #restart-btn {
+        #restart-btn, #resume-btn {
             background-color: #4CAF50;
             border: none;
             color: white;
@@ -64,6 +64,42 @@
             padding: 10px;
             border-radius: 5px;
         }
+        #pause-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #pause-menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0,0,0,0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+        #sound-toggle {
+            position: absolute;
+            top: 70px;
+            right: 20px;
+            background-color: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
@@ -76,10 +112,18 @@
         <p>Your score: <span id="final-score">0</span></p>
         <button id="restart-btn">Play Again</button>
     </div>
+    <div id="pause-menu">
+        <h2>Game Paused</h2>
+        <button id="resume-btn">Resume Game</button>
+        <p>Press ESC or P to resume</p>
+    </div>
+    <button id="pause-btn">Pause (P)</button>
+    <button id="sound-toggle">🔊 Sound On</button>
     <div id="instructions">
         <p>Move left/right: ← → or A/D</p>
         <p>Collect only perfect squares (1, 4, 9, 16, 25...)</p>
         <p>Non-perfect squares reduce health!</p>
+        <p>Pause: ESC or P</p>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -93,7 +137,14 @@
         let score = 0;
         let speed = 0.2;
         let gameOver = false;
+        let isPaused = false;
         let lastCoinTime = 0;
+        let soundEnabled = true;
+        let animationFrameId; // Define animationFrameId at the top level
+        
+        // Audio context and sounds
+        let audioContext;
+        let moveSound, collectSound, hitSound;
         
         // Initialize the game
         function init() {
@@ -165,22 +216,145 @@
             
             scene.add(player);
             
+            // Initialize audio
+            initAudio();
+            
             // Set up event listeners
             window.addEventListener('keydown', handleKeyDown);
             document.getElementById('restart-btn').addEventListener('click', restartGame);
+            document.getElementById('pause-btn').addEventListener('click', togglePause);
+            document.getElementById('resume-btn').addEventListener('click', togglePause);
+            document.getElementById('sound-toggle').addEventListener('click', toggleSound);
             
             // Start game loop
             animate();
+        }
+        
+        // Initialize audio context and create sound effects
+        function initAudio() {
+            try {
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create move sound (quick slide effect)
+                moveSound = createOscillatorSound(400, 200, 0.1, 'sine');
+                
+                // Create collect sound (positive bell-like sound)
+                collectSound = createOscillatorSound(600, 800, 0.3, 'sine', true);
+                
+                // Create hit sound (negative buzz)
+                hitSound = createOscillatorSound(200, 100, 0.3, 'sawtooth', false);
+                
+            } catch (e) {
+                console.error("Web Audio API not supported:", e);
+                soundEnabled = false;
+            }
+        }
+        
+        // Create a simple oscillator sound
+        function createOscillatorSound(startFreq, endFreq, duration, type, isPositive = true) {
+            return function() {
+                if (!soundEnabled || !audioContext) return;
+                
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(startFreq, audioContext.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(
+                    endFreq, audioContext.currentTime + duration
+                );
+                
+                // Set initial gain
+                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                
+                // Positive feedback sounds (rise in pitch)
+                if (isPositive) {
+                    // For positive sounds, we'll do a quick attack and slow decay
+                    gainNode.gain.exponentialRampToValueAtTime(
+                        0.01, audioContext.currentTime + duration
+                    );
+                } else {
+                    // For negative sounds, add a bit of wobble effect
+                    const wobbleSpeed = 50; // Hz of wobble
+                    const wobbleDepth = 0.2; // Depth of wobble
+                    
+                    // Create LFO for wobble
+                    const lfo = audioContext.createOscillator();
+                    lfo.type = 'sine';
+                    lfo.frequency.value = wobbleSpeed;
+                    
+                    const lfoGain = audioContext.createGain();
+                    lfoGain.gain.value = wobbleDepth;
+                    
+                    lfo.connect(lfoGain);
+                    lfoGain.connect(oscillator.frequency);
+                    lfo.start();
+                    lfo.stop(audioContext.currentTime + duration);
+                    
+                    // Faster decay for negative sounds
+                    gainNode.gain.exponentialRampToValueAtTime(
+                        0.01, audioContext.currentTime + duration * 0.8
+                    );
+                }
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + duration);
+            };
+        }
+        
+        // Toggle sound on/off
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            const soundButton = document.getElementById('sound-toggle');
+            if (soundEnabled) {
+                soundButton.textContent = "🔊 Sound On";
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+            } else {
+                soundButton.textContent = "🔇 Sound Off";
+            }
+        }
+        
+        // Toggle pause state
+        function togglePause() {
+            isPaused = !isPaused;
+            if (isPaused) {
+                document.getElementById('pause-menu').style.display = 'block';
+            } else {
+                document.getElementById('pause-menu').style.display = 'none';
+                // Resume the animation loop if it was stopped
+                if (!animationFrameId) {
+                    animate();
+                }
+            }
         }
         
         // Handle keyboard input
         function handleKeyDown(event) {
             if (gameOver) return;
             
+            // Pause game with Escape or P key
+            if (event.key === 'Escape' || event.key === 'p' || event.key === 'P') {
+                togglePause();
+                return;
+            }
+            
+            // Skip other inputs if game is paused
+            if (isPaused) return;
+            
+            // Handle lane changes
+            const oldLane = currentLane;
             if ((event.key === 'ArrowLeft' || event.key === 'a' || event.key === 'A') && currentLane > 0) {
                 currentLane--;
+                if (oldLane !== currentLane && moveSound) moveSound();
             } else if ((event.key === 'ArrowRight' || event.key === 'd' || event.key === 'D') && currentLane < 2) {
                 currentLane++;
+                if (oldLane !== currentLane && moveSound) moveSound();
             }
         }
         
@@ -252,6 +426,9 @@
                         score += 10;
                         document.getElementById('score').textContent = score;
                         
+                        // Play collect sound
+                        if (collectSound) collectSound();
+                        
                         // Increase speed slightly with each correct collection
                         speed += 0.005;
                         speed = Math.min(speed, 0.5); // Cap the speed
@@ -259,6 +436,9 @@
                         // Collected a non-perfect square
                         health -= 20;
                         updateHealthBar();
+                        
+                        // Play hit sound
+                        if (hitSound) hitSound();
                         
                         if (health <= 0) {
                             endGame();
@@ -318,32 +498,35 @@
         
         // Animation loop
         function animate() {
-            requestAnimationFrame(animate);
+            animationFrameId = requestAnimationFrame(animate);
             
-            if (!gameOver) {
-                // Move player to target lane smoothly
-                player.position.x += (lanes[currentLane] - player.position.x) * 0.1;
-                
-                // Move coins forward
-                for (let i = coins.length - 1; i >= 0; i--) {
-                    coins[i].position.z += speed;
-                    
-                    // Remove coins that passed the player
-                    if (coins[i].position.z > 10) {
-                        scene.remove(coins[i]);
-                        coins.splice(i, 1);
-                    }
-                }
-                
-                // Create new coins periodically
-                if (Date.now() - lastCoinTime > 1000) {
-                    createCoin();
-                    lastCoinTime = Date.now();
-                }
-                
-                // Check for collisions
-                checkCollisions();
+            if (isPaused || gameOver) {
+                return;
             }
+            
+            // Move player to target lane smoothly
+            player.position.x += (lanes[currentLane] - player.position.x) * 0.1;
+            
+            // Move coins forward
+            for (let i = coins.length - 1; i >= 0; i--) {
+                coins[i].position.z += speed;
+                coins[i].rotation.y += 0.02; // Rotate coins for visual effect
+                
+                // Remove coins that passed the player
+                if (coins[i].position.z > 10) {
+                    scene.remove(coins[i]);
+                    coins.splice(i, 1);
+                }
+            }
+            
+            // Create new coins periodically
+            if (Date.now() - lastCoinTime > 1000) {
+                createCoin();
+                lastCoinTime = Date.now();
+            }
+            
+            // Check for collisions
+            checkCollisions();
             
             renderer.render(scene, camera);
         }
